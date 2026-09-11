@@ -195,6 +195,8 @@ try:
 
         
     def generate_html_report(scan_type, total_found, total_scanned, time_taken, vulnerable_urls):
+        vulnerability_rate = (total_found / total_scanned * 100) if total_scanned > 0 else 0.0
+        vulnerability_rate_str = f"{vulnerability_rate:.2f}%"
         html_content = f"""
         <!DOCTYPE html>
         <html lang="en">
@@ -357,7 +359,7 @@ try:
                     margin-bottom: 1rem;
                 }}
                 .progress {{
-                    width: {(total_found / total_scanned) * 100}%;
+                    width: {vulnerability_rate}%;
                     height: 100%;
                     background-color: var(--secondary-color);
                     animation: pulse 2s infinite;
@@ -594,7 +596,7 @@ try:
                         <div class="stat-label">Scan Duration</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-value">{total_found / total_scanned:.2%}</div>
+                        <div class="stat-value">{vulnerability_rate_str}</div>
                         <div class="stat-label">Vulnerability Rate</div>
                     </div>
                 </div>
@@ -655,6 +657,7 @@ try:
             
             
     def run_sql_scanner(scan_state=None):
+            scan_state_lock = Lock()
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
             init(autoreset=True)
             
@@ -697,12 +700,13 @@ try:
                 response_time = time.time() - start_time
                 
                 vulnerability_detected = response_time >= 10
-                if vulnerability_detected and scan_state:
-                    scan_state['vulnerability_found'] = True
-                    scan_state['vulnerable_urls'].append(url_with_payload)
-                    scan_state['total_found'] += 1
                 if scan_state:
-                    scan_state['total_scanned'] += 1
+                    with scan_state_lock:
+                        if vulnerability_detected:
+                            scan_state['vulnerability_found'] = True
+                            scan_state['vulnerable_urls'].append(url_with_payload)
+                            scan_state['total_found'] += 1
+                        scan_state['total_scanned'] += 1
                 
                 return success, url_with_payload, response_time, error_message, vulnerability_detected
 
@@ -714,10 +718,10 @@ try:
                 if issubclass(exc_type, KeyboardInterrupt):
                     print(f"\n{Fore.YELLOW}Program terminated by the user!")
                     save_results(vulnerable_urls, total_found, total_scanned, start_time)
-                    sys.exit(0)
+                    return
                 else:
                     print(f"\n{Fore.RED}An unexpected error occurred: {exc_value}")
-                    sys.exit(0)
+                    return
 
             def save_results(vulnerable_urls, total_found, total_scanned, start_time):
                 generate_report = input(f"{Fore.CYAN}\n[?] Do you want to generate an HTML report? (y/n): ").strip().lower()
@@ -840,9 +844,7 @@ try:
                                         print(f"{Fore.YELLOW}[→] Scanning with payload: {stripped_payload}")
                                         encoded_url_with_payload = encoded_url
                                     else:
-                                        list_stripped_payload = url_with_payload
-                                        for u in urls:
-                                            list_stripped_payload = list_stripped_payload.replace(u, '')
+                                        list_stripped_payload = url_with_payload.replace(url, '')
                                         encoded_stripped_payload = quote(list_stripped_payload, safe='')
 
                                         encoded_url_with_payload = url_with_payload.replace(list_stripped_payload, encoded_stripped_payload)
@@ -860,9 +862,7 @@ try:
                                         print(f"{Fore.YELLOW}[→] Scanning with payload: {stripped_payload}")
                                         encoded_url_with_payload = encoded_url
                                     else:
-                                        list_stripped_payload = url_with_payload
-                                        for u in urls:
-                                            list_stripped_payload = list_stripped_payload.replace(u, '')
+                                        list_stripped_payload = url_with_payload.replace(url, '')
                                         encoded_stripped_payload = quote(list_stripped_payload, safe='')
 
                                         encoded_url_with_payload = url_with_payload.replace(list_stripped_payload, encoded_stripped_payload)
@@ -895,9 +895,7 @@ try:
                                             print(f"{Fore.YELLOW}[→] Scanning with payload: {stripped_payload}")
                                             encoded_url_with_payload = encoded_url
                                         else:
-                                            list_stripped_payload = url_with_payload
-                                            for u in urls:
-                                                list_stripped_payload = list_stripped_payload.replace(u, '')
+                                            list_stripped_payload = url_with_payload.replace(url, '')
                                             encoded_stripped_payload = quote(list_stripped_payload, safe='')
 
                                             encoded_url_with_payload = url_with_payload.replace(list_stripped_payload, encoded_stripped_payload)
@@ -920,9 +918,7 @@ try:
                                             print(f"{Fore.YELLOW}[→] Scanning with payload: {stripped_payload}")
                                             encoded_url_with_payload = encoded_url
                                         else:
-                                            list_stripped_payload = url_with_payload
-                                            for u in urls:
-                                                list_stripped_payload = list_stripped_payload.replace(u, '')
+                                            list_stripped_payload = url_with_payload.replace(url, '')
                                             encoded_stripped_payload = quote(list_stripped_payload, safe='')
 
                                             encoded_url_with_payload = url_with_payload.replace(list_stripped_payload, encoded_stripped_payload)
@@ -938,16 +934,17 @@ try:
                 finally:
                     if 'executor' in locals():
                         executor.shutdown(wait=False)
-                    sys.exit(0)
+                    return
 
             if __name__ == "__main__":
                 try:
                     main()
                 except KeyboardInterrupt:
-                    sys.exit(0)
+                    return
 
 
     def run_xss_scanner(scan_state=None):
+        scan_state_lock = Lock()
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         logging.getLogger('WDM').setLevel(logging.ERROR)
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -962,7 +959,7 @@ try:
                     return [line.strip() for line in file if line.strip()]
             except Exception as e:
                 print(Fore.RED + f"[!] Error loading payloads: {e}")
-                exit()
+                return []
 
         def generate_payload_urls(url, payload):
             url_combinations = []
@@ -1049,9 +1046,10 @@ try:
                                 print(result)
                                 vulnerable_urls.append(payload_url)
                                 if scan_state:
-                                    scan_state['vulnerability_found'] = True
-                                    scan_state['vulnerable_urls'].append(payload_url)
-                                    scan_state['total_found'] += 1
+                                    with scan_state_lock:
+                                        scan_state['vulnerability_found'] = True
+                                        scan_state['vulnerable_urls'].append(payload_url)
+                                        scan_state['total_found'] += 1
                                 alert.accept()
                             else:
                                 result = Fore.RED + f"[✗]{Fore.CYAN} Not Vulnerable:{Fore.RED} {payload_url}"
@@ -1130,7 +1128,7 @@ try:
                 report_file = save_html_report(html_content, filename)
             else:
                 print(Fore.RED + "\nExiting...")
-                exit()
+                return
 
         def get_file_path(prompt_text):
             completer = PathCompleter()
@@ -1227,11 +1225,11 @@ try:
                 print(Fore.RED + "\n[!] Scan interrupted by the user.")
                 print_scan_summary(scan_state['total_found'], total_scanned, start_time)
                 save_results(scan_state['vulnerable_urls'], scan_state['total_found'], total_scanned, start_time)
-                exit()
+                return
 
             print_scan_summary(scan_state['total_found'], total_scanned, start_time)
             save_results(scan_state['vulnerable_urls'], scan_state['total_found'], total_scanned, start_time)
-            exit()
+            return
 
 
         if __name__ == "__main__":
@@ -1239,10 +1237,11 @@ try:
                 main()
             except KeyboardInterrupt:
                 print(Fore.RED + "\n[!] Scan interrupted by the user. Exiting...")
-                sys.exit()
+                return
 
 
     def run_or_scanner(scan_state=None):
+        scan_state_lock = Lock()
             
 
         init()
@@ -1300,9 +1299,10 @@ try:
                 if "google.com" in current_url:
                     if current_url.startswith("https://google.com") or "google.com" in current_url.split("/")[2]: 
                         if scan_state:
-                            scan_state['vulnerability_found'] = True
-                            scan_state['vulnerable_urls'].append(url)
-                            scan_state['total_found'] += 1
+                            with scan_state_lock:
+                                scan_state['vulnerability_found'] = True
+                                scan_state['vulnerable_urls'].append(url)
+                                scan_state['total_found'] += 1
                         print(Fore.GREEN + f"[✓] Vulnerable: {url}")
                         return True
                     else:
@@ -1404,7 +1404,7 @@ try:
                             modified_params = query_params.copy()
                             modified_params[param] = [payload]
                             
-                            test_url = urllib.parse.urlunparse(
+                            target_url = urllib.parse.urlunparse(
                                 parsed._replace(
                                     query=urllib.parse.urlencode(modified_params, doseq=True)
                                 )
@@ -1412,11 +1412,11 @@ try:
                             
                             fut = executor.submit(
                                 check_payload_with_selenium,
-                                test_url,
+                                target_url,
                                 payload,
                                 param
                             )
-                            future_to_url[fut] = test_url
+                            future_to_url[fut] = target_url
                     
                     for future in as_completed(future_to_url):
                         if not scan_active:
@@ -1669,9 +1669,10 @@ try:
                 print(Fore.YELLOW + "\n[-] No vulnerabilities found.")
                 print(Fore.CYAN + f"\n[i] Total URLs scanned: {scan_state['total_scanned']}")
 
-            sys.exit()
+            return
 
     def run_lfi_scanner(scan_state=None):
+        scan_state_lock = Lock()
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
         init(autoreset=True)
@@ -1728,12 +1729,13 @@ try:
                     else:
                         result = Fore.RED + f"[✗]{Fore.CYAN} Not Vulnerable: {Fore.RED} {target_url} {Fore.CYAN} - Response Time: {response_time} seconds"
 
-                    if is_vulnerable and scan_state:
-                        scan_state['vulnerability_found'] = True
-                        scan_state['vulnerable_urls'].append(target_url)
-                        scan_state['total_found'] += 1
                     if scan_state:
-                        scan_state['total_scanned'] += 1
+                        with scan_state_lock:
+                            if is_vulnerable:
+                                scan_state['vulnerability_found'] = True
+                                scan_state['vulnerable_urls'].append(target_url)
+                                scan_state['total_found'] += 1
+                            scan_state['total_scanned'] += 1
 
                     return result, is_vulnerable
                 except requests.exceptions.RequestException as e:
@@ -1911,9 +1913,10 @@ try:
 
         print(Fore.CYAN + f"\n[i] Total URLs scanned: {scan_state['total_scanned']}")
 
-        exit()
+        return
         
     def run_crlf_scanner(scan_state=None):
+        scan_state_lock = Lock()
         init(autoreset=True)
 
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -2025,11 +2028,12 @@ try:
                                 f"{Fore.CYAN} - Response Time: {response_time:.2f} seconds")
 
                 if scan_state:
-                    scan_state['total_scanned'] += 1
-                    if is_vulnerable:
-                        scan_state['vulnerability_found'] = True
-                        scan_state['vulnerable_urls'].append(target_url)
-                        scan_state['total_found'] += 1
+                    with scan_state_lock:
+                        scan_state['total_scanned'] += 1
+                        if is_vulnerable:
+                            scan_state['vulnerability_found'] = True
+                            scan_state['vulnerable_urls'].append(target_url)
+                            scan_state['total_found'] += 1
 
                 return result, is_vulnerable
 
@@ -2169,7 +2173,7 @@ try:
         save_results(vulnerable_urls, total_found, total_scanned, start_time)
 
         print(Fore.RED + "\nExiting...")
-        exit()
+        return
         
         
     

@@ -56,5 +56,10 @@ class TestLoxsFixes(unittest.TestCase):
             self.assertEqual(res.status_code, 200)
             mock_get.assert_called_once_with("http://example.com/test")
 
+    def test_generate_html_report_zero_scanned(self):
+        import loxs
+        report = loxs.generate_html_report("Test Scan", 0, 0, 5, [])
+        self.assertIn("0.00%", report)
+
 if __name__ == '__main__':
     unittest.main()
