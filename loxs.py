@@ -1,3 +1,4 @@
+import queue
 #!/usr/bin/python3
 
 VERSION = 'v2.1.0'
@@ -674,7 +675,8 @@ try:
                     session.mount('https://', adapter)
                     return session
 
-            def perform_request(url, payload, cookie):
+            session = get_retry_session()
+            def perform_request(url, payload, cookie, session=None):
                 url_with_payload = f"{url}{payload}"
                 start_time = time.time()
                     
@@ -683,7 +685,8 @@ try:
                 }
 
                 try:
-                    response = requests.get(url_with_payload, headers=headers, cookies={'cookie': cookie} if cookie else None)
+                    req_func = session.get if session else requests.get
+                    response = req_func(url_with_payload, headers=headers, cookies={'cookie': cookie} if cookie else None)
                     response.raise_for_status()
                     success = True
                     error_message = None
@@ -827,7 +830,7 @@ try:
                             print(Fore.YELLOW + f"│{box_content.center(box_width - 2)}│")
                             print(Fore.YELLOW + "└" + "─" * (box_width - 2) + "┘\n")
                             for payload in payloads:
-                                success, url_with_payload, response_time, error_message, vulnerability_detected = perform_request(url, payload, cookie)
+                                success, url_with_payload, response_time, error_message, vulnerability_detected = perform_request(url, payload, cookie, session)
 
                                 if vulnerability_detected:
                                     stripped_payload = url_with_payload.replace(url, '')
@@ -879,7 +882,7 @@ try:
                                 
                                 futures = []
                                 for payload in payloads:
-                                    futures.append(executor.submit(perform_request, url, payload, cookie))
+                                    futures.append(executor.submit(perform_request, url, payload, cookie, session))
 
                                 for future in concurrent.futures.as_completed(futures):
                                     success, url_with_payload, response_time, error_message, vulnerability_detected = future.result()
@@ -1017,7 +1020,7 @@ try:
         def get_driver():
             try:
                 return driver_pool.get_nowait()
-            except:
+            except queue.Empty:
                 with driver_lock:
                     return create_driver()
 
@@ -1435,7 +1438,7 @@ try:
                 for driver in drivers:
                     try:
                         driver.quit()
-                    except:
+                    except Exception:
                         pass
                 drivers.clear()
 
@@ -1462,7 +1465,7 @@ try:
                 for driver in drivers:
                     try:
                         driver.quit()
-                    except:
+                    except Exception:
                         pass
                 drivers.clear()
 
@@ -1474,7 +1477,7 @@ try:
             completer = PathCompleter()
             try:
                 return prompt(prompt_text, completer=completer).strip()
-            except:
+            except Exception:
                 return None
 
         def prompt_for_urls():
@@ -1698,18 +1701,26 @@ try:
             return session
         
         def test_lfi(url, payloads, success_criteria, max_threads=5):
+            # Pre-compile success criteria regex patterns for performance
+            compiled_criteria = [
+                pattern if isinstance(pattern, re.Pattern) else re.compile(pattern)
+                for pattern in success_criteria
+            ]
+
+            session = get_retry_session()
+
             def check_payload(payload):
                 encoded_payload = urllib.parse.quote(payload.strip())
                 target_url = f"{url}{encoded_payload}"
                 start_time = time.time()
                 
                 try:
-                    response = requests.get(target_url)
+                    response = session.get(target_url)
                     response_time = round(time.time() - start_time, 2)
                     result = None
                     is_vulnerable = False
                     if response.status_code == 200:
-                        is_vulnerable = any(re.search(pattern, response.text) for pattern in success_criteria)
+                        is_vulnerable = any(pattern.search(response.text) for pattern in compiled_criteria)
                         if is_vulnerable:
                             result = Fore.GREEN + f"[✓]{Fore.CYAN} Vulnerable: {Fore.GREEN} {target_url} {Fore.CYAN} - Response Time: {response_time} seconds"
                         else:
@@ -1948,10 +1959,12 @@ try:
             
             return [payload.replace('{{Hostname}}', domain) for payload in base_payloads]
 
-        REGEX_PATTERNS = [
+        RAW_PATTERNS = [
             r'(?m)^(?:Location\s*?:\s*(?:https?:\/\/|\/\/|\/\\\\|\/\\)(?:[a-zA-Z0-9\-_\.@]*)loxs\.pages\.dev\/?(\/|[^.].*)?$|(?:Set-Cookie\s*?:\s*(?:\s*?|.*?;\s*)?loxs=injected(?:\s*?)(?:$|;)))',
             r'(?m)^(?:Location\s*?:\s*(?:https?:\/\/|\/\/|\/\\\\|\/\\)(?:[a-zA-Z0-9\-_\.@]*)loxs\.pages\.dev\/?(\/|[^.].*)?$|(?:Set-Cookie\s*?:\s*(?:\s*?|.*?;\s*)?loxs=injected(?:\s*?)(?:$|;)|loxs-x))'
         ]
+        # Pre-compile regex patterns for performance
+        REGEX_PATTERNS = [re.compile(p, re.IGNORECASE) for p in RAW_PATTERNS]
 
         def get_random_user_agent():
             return random.choice(USER_AGENTS)
@@ -1970,7 +1983,7 @@ try:
             session.mount('https://', adapter)
             return session
 
-        def check_crlf_vulnerability(url, payload, scan_state=None):
+        def check_crlf_vulnerability(url, payload, scan_state=None, session=None):
             target_url = f"{url}{payload}"
             start_time = time.time()
 
@@ -1984,8 +1997,8 @@ try:
             result = None
 
             try:
-                session = get_retry_session()
-                response = session.get(target_url, headers=headers, allow_redirects=False, verify=False, timeout=10)
+                sess = session if session else get_retry_session()
+                response = sess.get(target_url, headers=headers, allow_redirects=False, verify=False, timeout=10)
                 response_time = time.time() - start_time
 
                 is_vulnerable = False
@@ -1993,11 +2006,11 @@ try:
 
                 for header, value in response.headers.items():
                     combined_header = f"{header}: {value}"
-                    if any(re.search(pattern, combined_header, re.IGNORECASE) for pattern in REGEX_PATTERNS):
+                    if any(pattern.search(combined_header) for pattern in REGEX_PATTERNS):
                         is_vulnerable = True
                         vulnerability_details.append(f"{Fore.WHITE}Header Injection: {Fore.LIGHTBLACK_EX}{combined_header}")
 
-                if any(re.search(pattern, response.text, re.IGNORECASE) for pattern in REGEX_PATTERNS):
+                if any(pattern.search(response.text) for pattern in REGEX_PATTERNS):
                     is_vulnerable = True
                     vulnerability_details.append(f"{Fore.WHITE}Body Injection: {Fore.LIGHTBLACK_EX}Detected CRLF in response body")
 
@@ -2030,8 +2043,9 @@ try:
             vulnerable_urls = []
             payloads = generate_payloads(url)
 
+            session = get_retry_session()
             with ThreadPoolExecutor(max_workers=max_threads) as executor:
-                future_to_payload = {executor.submit(check_crlf_vulnerability, url, payload): payload for payload in payloads}
+                future_to_payload = {executor.submit(check_crlf_vulnerability, url, payload, None, session): payload for payload in payloads}
                 for future in as_completed(future_to_payload):
                     payload = future_to_payload[future]
                     try:
