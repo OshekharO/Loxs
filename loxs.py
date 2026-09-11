@@ -17,70 +17,52 @@ class Color:
     UNITALIC = '\033[23m'
 
 try:
-    import os
-    import sys
-    import requests
-    from git import Repo
-    import yaml
-    import shutil
-    from flask import session
-    from concurrent.futures import Executor
-    import urllib
-    import signal
-    import sys
-    import threading
-    from urllib.parse import urlsplit
-    import subprocess
-    from urllib.parse import urlunsplit
+    import argparse
     import asyncio
-    from selenium.webdriver.chrome.service import Service
-    import re
-    from rich.progress import Progress
-    import urllib.parse
-    import requests
-    import urllib3
-    from requests.adapters import HTTPAdapter
-    from urllib3.util.retry import Retry
-    from prompt_toolkit import prompt
-    from prompt_toolkit.completion import PathCompleter
-    from urllib.parse import urlparse
+    import concurrent.futures
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from curses import panel
+    from functools import partial
+    import logging
+    import os
+    from queue import Queue
     import random
     import re
-    from wsgiref import headers
-    from colorama import Fore, Style, init
+    import shutil
+    import signal
+    import subprocess
+    import sys
+    import threading
+    from threading import Lock
+    import time
     from time import sleep
-    from rich import print as rich_print
-    from rich.panel import Panel
-    from rich.table import Table
-    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse, quote
+    import urllib
+    import urllib.parse
+    from urllib.parse import parse_qs, quote, urlencode, urlparse, urlsplit, urlunparse, urlunsplit
+
+    import aiohttp
     from bs4 import BeautifulSoup
-    import urllib3
+    from colorama import Fore, Style, init
+    from packaging import version
     from prompt_toolkit import prompt
     from prompt_toolkit.completion import PathCompleter
-    import logging
+    import requests
     from requests.adapters import HTTPAdapter
+    import urllib3
     from urllib3.util.retry import Retry
-    import argparse
-    import concurrent.futures
-    import time
-    import aiohttp
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service as ChromeService
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from webdriver_manager.chrome import ChromeDriverManager
-    from urllib.parse import urlsplit, parse_qs, urlencode, urlunsplit
+    from rich import print as rich_print
     from rich.console import Console
+    from rich.panel import Panel
+    from rich.progress import Progress
+    from rich.table import Table
+
+    from selenium import webdriver
     from selenium.common.exceptions import TimeoutException, UnexpectedAlertPresentException
-    from functools import partial
-    from packaging import version
-    from rich.text import Text
-    from queue import Queue
-    from threading import Lock
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.webdriver.support.ui import WebDriverWait
+    from webdriver_manager.chrome import ChromeDriverManager
 
     USER_AGENTS = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
@@ -1087,8 +1069,8 @@ try:
             vulnerable_urls = []
             total_scanned = [0]
             
-            for _ in range(3):
-                driver_pool.put(create_driver())
+            # Drivers are lazily initialized on demand in get_driver()
+            pass
             
             try:
                 with ThreadPoolExecutor(max_workers=2) as executor:
@@ -1357,7 +1339,7 @@ try:
                     path = parsed.path
                     
                     executor = ThreadPoolExecutor(max_workers=max_threads)
-                    futures = []
+                    future_to_url = {}
                     
                     for payload in payloads:
                         if not scan_active:
@@ -1369,22 +1351,22 @@ try:
                         
                         test_url = parsed._replace(path=path + payload)
                         
-                        futures.append(
-                            executor.submit(
-                                check_payload_with_selenium,
-                                url=urllib.parse.urlunparse(test_url),
-                                payload=payload,
-                                param_name='path'
-                            )
+                        test_url_str = urllib.parse.urlunparse(test_url)
+                        fut = executor.submit(
+                            check_payload_with_selenium,
+                            url=test_url_str,
+                            payload=payload,
+                            param_name='path'
                         )
+                        future_to_url[fut] = test_url_str
                     
-                    for future in as_completed(futures):
+                    for future in as_completed(future_to_url):
                         if not scan_active:
                             break
                         try:
                             if future.result():
                                 found_vulnerabilities += 1
-                                vulnerable_urls.append(urllib.parse.urlunparse(test_url))
+                                vulnerable_urls.append(future_to_url[future])
                         except Exception as e:
                             if scan_active:
                                 print(Fore.RED + f"[!] Error testing path: {str(e).splitlines()[0]}")
@@ -1402,7 +1384,7 @@ try:
                     print(Fore.GREEN + f"\n[i] Found parameters: {', '.join(query_params.keys())}")
                     
                     executor = ThreadPoolExecutor(max_workers=max_threads)
-                    futures = []
+                    future_to_url = {}
                     
                     for payload in payloads:
                         if not scan_active:
@@ -1425,22 +1407,21 @@ try:
                                 )
                             )
                             
-                            futures.append(
-                                executor.submit(
-                                    check_payload_with_selenium, 
-                                    test_url, 
-                                    payload, 
-                                    param
-                                )
+                            fut = executor.submit(
+                                check_payload_with_selenium,
+                                test_url,
+                                payload,
+                                param
                             )
+                            future_to_url[fut] = test_url
                     
-                    for future in as_completed(futures):
+                    for future in as_completed(future_to_url):
                         if not scan_active:
                             break
                         try:
                             if future.result():
                                 found_vulnerabilities += 1
-                                vulnerable_urls.append(test_url)
+                                vulnerable_urls.append(future_to_url[future])
                         except Exception as e:
                             if scan_active:
                                 print(Fore.RED + f"[!] Error testing parameter: {str(e).splitlines()[0]}")
@@ -2258,8 +2239,9 @@ try:
                 return False
 
         def normalize_version(v):
-            # Remove 'v' prefix if present
-            # v = v.lstrip('v')
+            # Remove leading 'v' or 'V' if present
+            if v and v[0].lower() == 'v':
+                v = v[1:]
 
             # Three components (major.minor.patch)
             parts = v.split('.')
