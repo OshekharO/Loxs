@@ -1003,16 +1003,19 @@ try:
             chrome_options.add_argument("--headless")
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
             chrome_options.add_argument("--disable-extensions")
             chrome_options.add_argument("--disable-browser-side-navigation")
             chrome_options.add_argument("--disable-infobars")
             chrome_options.add_argument("--disable-notifications")
             chrome_options.page_load_strategy = 'eager'
             logging.disable(logging.CRITICAL)
-            
 
-            driver_service = Service(ChromeDriverManager().install())
-            return webdriver.Chrome(service=driver_service, options=chrome_options)
+            try:
+                driver_service = Service(ChromeDriverManager().install())
+                return webdriver.Chrome(service=driver_service, options=chrome_options)
+            except Exception:
+                return webdriver.Chrome(options=chrome_options)
 
         def get_driver():
             try:
@@ -1257,21 +1260,23 @@ try:
                 
             chrome_options = Options()
             chrome_options.add_argument("--headless")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--window-size=1920,1080")
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--window-size=1920,1080")
             chrome_options.add_argument("--disable-extensions")
-            chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-browser-side-navigation")
             chrome_options.add_argument("--disable-infobars")
             chrome_options.add_argument("--disable-notifications")
             chrome_options.page_load_strategy = 'eager'
             logging.disable(logging.CRITICAL)
 
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=chrome_options)
+            try:
+                service = Service(ChromeDriverManager().install())
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+            except Exception:
+                driver = webdriver.Chrome(options=chrome_options)
+
             driver.set_page_load_timeout(15)
             drivers.append(driver)
             return driver
