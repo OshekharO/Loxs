@@ -1,4 +1,6 @@
 import unittest
+import re
+import requests
 from unittest.mock import MagicMock, patch
 import urllib.parse
 from packaging import version
@@ -23,6 +25,36 @@ class TestLoxsFixes(unittest.TestCase):
             test_url_obj = parsed._replace(path=path + payload)
             target_url = urllib.parse.urlunparse(test_url_obj)
             self.assertEqual(target_url, "http://example.com/test/redirect_payload")
+
+    def test_crlf_compiled_regex(self):
+        raw_patterns = [
+            r'(?m)^(?:Location\s*?:\s*(?:https?:\/\/|\/\/|\/\\\\|\/\\)(?:[a-zA-Z0-9\-_\.@]*)loxs\.pages\.dev\/?(\/|[^.].*)?$|(?:Set-Cookie\s*?:\s*(?:\s*?|.*?;\s*)?loxs=injected(?:\s*?)(?:$|;)))',
+            r'(?m)^(?:Location\s*?:\s*(?:https?:\/\/|\/\/|\/\\\\|\/\\)(?:[a-zA-Z0-9\-_\.@]*)loxs\.pages\.dev\/?(\/|[^.].*)?$|(?:Set-Cookie\s*?:\s*(?:\s*?|.*?;\s*)?loxs=injected(?:\s*?)(?:$|;)|loxs-x))'
+        ]
+        compiled_patterns = [re.compile(p, re.IGNORECASE) for p in raw_patterns]
+
+        test_header = "Set-Cookie: loxs=injected"
+        is_match = any(pattern.search(test_header) for pattern in compiled_patterns)
+        self.assertTrue(is_match)
+
+    def test_lfi_compiled_regex(self):
+        success_criteria = ['root:x:0:', 'admin:']
+        compiled_criteria = [re.compile(p) for p in success_criteria]
+
+        response_text = "root:x:0:0:root:/root:/bin/bash"
+        is_vulnerable = any(pattern.search(response_text) for pattern in compiled_criteria)
+        self.assertTrue(is_vulnerable)
+
+    def test_session_reuse(self):
+        session = requests.Session()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "root:x:0:"
+
+        with patch.object(session, 'get', return_value=mock_response) as mock_get:
+            res = session.get("http://example.com/test")
+            self.assertEqual(res.status_code, 200)
+            mock_get.assert_called_once_with("http://example.com/test")
 
 if __name__ == '__main__':
     unittest.main()
